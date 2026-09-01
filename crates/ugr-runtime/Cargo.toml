@@ -1,0 +1,12 @@
+[package]
+name = "ugr-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Universal Web Game native runtime"
+license = "MIT"
+
+[dependencies]
+thiserror = "=2.0.20"
+deno_core = "0"
+serde_json = "=1.0.151"
+ugr-canvas = { path = "../ugr-canvas" }

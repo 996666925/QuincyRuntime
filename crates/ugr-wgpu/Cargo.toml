@@ -1,0 +1,11 @@
+[package]
+name = "ugr-wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "wgpu backend for the Universal Web Game runtime"
+license = "MIT"
+
+[dependencies]
+wgpu = "=30.0.1"
+winit = "=0.30.13"
+serde_json = "=1.0.151"

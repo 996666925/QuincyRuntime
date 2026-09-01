@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ugr-runtime",
+    "crates/ugr-wgpu",
+    "crates/ugr-webgl",
+    "crates/ugr-cli",
+    "crates/ugr-canvas",
+]
+default-members = ["crates/ugr-cli"]

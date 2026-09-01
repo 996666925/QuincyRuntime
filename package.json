@@ -1,0 +1,10 @@
+{
+  "name": "ugr-game",
+  "main": "tests/scripts/webgl2_triangle.js",
+  "ugr": {
+    "renderMode": "webgl2",
+    "title": "UGR Game",
+    "width": 1280,
+    "height": 720
+  }
+}

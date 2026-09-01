@@ -1,0 +1,9 @@
+[package]
+name = "ugr-canvas"
+version = "0.1.0"
+edition = "2021"
+description = "Canvas 2D state and command backend for the Universal Web Game runtime"
+license = "MIT"
+
+[dependencies]
+skia-safe = "=0.99.0"
