@@ -1,9 +1,11 @@
 {
   "name": "ugr-game",
-  "main": "tests/scripts/webgl2_triangle.js",
+  "main": "tests/scripts/index.html",
   "ugr": {
-    "renderMode": "webgl2",
-    "title": "UGR Game",
+    "renderModes": [
+      "ui"
+    ],
+    "title": "Title",
     "width": 1280,
     "height": 720
   }

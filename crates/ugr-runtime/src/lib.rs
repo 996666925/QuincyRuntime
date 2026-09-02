@@ -6,8 +6,6 @@
 
 use std::path::Path;
 
-pub mod webgl;
-
 /// Errors returned by the runtime bootstrap layer.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -411,6 +409,40 @@ mod tests {
                 .unwrap(),
             "webgl2"
         );
+    }
+
+    #[test]
+    fn dom_facade_supports_basic_nodes_styles_and_events() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r#"__ugr_install_document('<body><div id="root"><span class="title">Hello</span><input value="x"></div><style>.title { color: red; }</style></body>'); const root=document.getElementById('root'); const title=root.querySelector('.title'); const input=root.querySelector('input'); let clicked=0; input.addEventListener('click',()=>clicked++); input.click(); title.setAttribute('data-ready','yes'); `${title.textContent}|${title.getAttribute('data-ready')}|${input.value}|${clicked}|${getComputedStyle(title).getPropertyValue('color')}`"#,
+            )
+            .unwrap();
+        assert_eq!(result, "Hello|yes|x|1|red");
+    }
+
+    #[test]
+    fn dom_facade_supports_selectors_mutation_and_event_bubbling() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r#"__ugr_install_document('<body><div id="panel"><span class="label" data-kind="score">0</span></div><style>#panel .label[data-kind=score] { font-size: 12px; }</style></body>'); const panel=document.querySelector('#panel'); const label=document.querySelector('#panel .label[data-kind=score]'); const button=document.createElement('input'); button.type='button'; button.classList.add('primary'); button.dataset.action='start'; let events=[]; panel.addEventListener('click',()=>events.push('panel')); button.addEventListener('click',()=>events.push('button')); panel.appendChild(button); button.click(); label.textContent='10'; button.style.color='blue'; `${panel.querySelectorAll('input.primary').length}|${button.dataset.action}|${label.textContent}|${events.join(',')}|${getComputedStyle(label).fontSize || getComputedStyle(label).getPropertyValue('font-size')}|${button.style.color}`"#,
+            )
+            .unwrap();
+        assert_eq!(result, "1|start|10|button,panel|12px|blue");
+    }
+
+    #[test]
+    fn serialized_dom_keeps_styles_and_mutated_input_value() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r##"__ugr_install_document('<html><head><style>.panel { background: #20242b; }</style></head><body><div class="panel"><input value="0"></div></body></html>'); document.querySelector('input').value='15'; document.documentElement.outerHTML"##,
+            )
+            .unwrap();
+        assert!(result.contains("background: #20242b"));
+        assert!(result.contains("value=\"15\""));
     }
 
     #[test]

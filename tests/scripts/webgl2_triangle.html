@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>UGR WebGL2 HTML Demo</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <script src="webgl2_triangle.js"></script>
+    <script>
+      // Inline scripts are evaluated after external scripts in document order.
+      globalThis.htmlEntryLoaded = true;
+    </script>
+  </body>
+</html>

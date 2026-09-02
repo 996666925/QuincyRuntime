@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <title>UGR Calculator</title>
+    <style>
+      .calculator { width: 240px; padding: 16px; background: #20242b; color: #fff; }
+      .display { width: 220px; height: 32px; margin-bottom: 8px; text-align: right; }
+      .keys { display: flex; flex-direction: row; flex-wrap: wrap; width: 220px; }
+      .key { width: 48px; height: 32px; margin: 2px; }
+      .result { color: #7ee787; }
+    </style>
+  </head>
+  <body>
+    <div id="calculator" class="calculator">
+      <input id="display" class="display" type="text" value="0">
+      <div class="keys">
+        <button class="key" data-value="7">7</button>
+        <button class="key" data-value="8">8</button>
+        <button class="key" data-value="9">9</button>
+        <button class="key" data-op="/">/</button>
+        <button class="key" data-value="4">4</button>
+        <button class="key" data-value="5">5</button>
+        <button class="key" data-value="6">6</button>
+        <button class="key" data-op="*">*</button>
+        <button class="key" data-value="1">1</button>
+        <button class="key" data-value="2">2</button>
+        <button class="key" data-value="3">3</button>
+        <button class="key" data-op="-">-</button>
+        <button class="key" data-value="0">0</button>
+        <button id="equals" class="key" data-op="=">=</button>
+        <button id="clear" class="key" data-op="clear">C</button>
+        <button class="key" data-op="+">+</button>
+      </div>
+      <span id="status" class="result">Ready</span>
+    </div>
+    <script>
+      const display = document.getElementById("display");
+      const status = document.getElementById("status");
+      let pending = null;
+      let resetDisplay = false;
+
+      const calculate = (left, operator, right) => {
+        if (operator === "+") return left + right;
+        if (operator === "-") return left - right;
+        if (operator === "*") return left * right;
+        if (operator === "/") return right === 0 ? NaN : left / right;
+        return right;
+      };
+
+      const press = (button) => {
+        const value = button.dataset.value;
+        const operator = button.dataset.op;
+        if (value !== undefined) {
+          display.value = resetDisplay || display.value === "0" ? value : display.value + value;
+          resetDisplay = false;
+          return;
+        }
+        if (operator === "clear") {
+          display.value = "0";
+          pending = null;
+          status.textContent = "Ready";
+          return;
+        }
+        if (operator === "=") {
+          if (!pending) return;
+          const result = calculate(pending.left, pending.operator, Number(display.value));
+          display.value = Number.isFinite(result) ? String(result) : "Error";
+          status.textContent = display.value === "Error" ? "Cannot divide by zero" : "Done";
+          status.classList.toggle("error", display.value === "Error");
+          pending = null;
+          resetDisplay = true;
+          return;
+        }
+        pending = { left: Number(display.value), operator };
+        resetDisplay = true;
+        status.textContent = `${display.value} ${operator}`;
+      };
+
+      for (const button of document.querySelectorAll("button.key")) {
+        button.addEventListener("click", () => press(button));
+      }
+
+      const demoResult = calculate(7, "+", 8);
+      display.value = String(demoResult);
+      status.textContent = "7 + 8 = 15";
+      globalThis.calculatorResult = display.value;
+      `${display.value} (${status.textContent})`;
+    </script>
+  </body>
+</html>

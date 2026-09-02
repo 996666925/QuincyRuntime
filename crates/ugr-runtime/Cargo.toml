@@ -9,4 +9,3 @@ license = "MIT"
 thiserror = "=2.0.20"
 deno_core = "0"
 serde_json = "=1.0.151"
-ugr-canvas = { path = "../ugr-canvas" }

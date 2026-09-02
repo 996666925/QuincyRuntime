@@ -6,5 +6,8 @@ members = [
     "crates/ugr-webgl",
     "crates/ugr-cli",
     "crates/ugr-canvas",
+    "crates/ugr-html",
+    "crates/ugr-ui",
+    "crates/ugr-compositor",
 ]
 default-members = ["crates/ugr-cli"]

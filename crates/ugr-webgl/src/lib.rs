@@ -14,6 +14,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::Window;
 
+mod context;
+pub use context::{ContextAttributes, ResourceKind, WebGlContext, WebGlVersion};
+
 #[derive(Debug, Clone, Copy)]
 pub enum GlCommand {
     ClearColor(f32, f32, f32, f32),

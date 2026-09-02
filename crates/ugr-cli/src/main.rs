@@ -9,6 +9,7 @@ enum RenderMode {
     WebGpu,
     WebGl,
     Canvas,
+    Ui,
 }
 
 impl RenderMode {
@@ -18,6 +19,7 @@ impl RenderMode {
             "webgpu" | "wgpu" => Ok(Self::WebGpu),
             "webgl" | "webgl1" | "webgl2" => Ok(Self::WebGl),
             "canvas" | "canvas2d" => Ok(Self::Canvas),
+            "ui" | "html" | "native" => Ok(Self::Ui),
             _ => Err(format!("unknown render mode '{value}'")),
         }
     }
@@ -25,7 +27,7 @@ impl RenderMode {
 
 struct ProjectConfig {
     entry: Option<PathBuf>,
-    mode: RenderMode,
+    modes: Vec<RenderMode>,
     runtime: RuntimeConfig,
 }
 
@@ -33,7 +35,7 @@ fn load_project_config(path: &Path) -> Result<ProjectConfig, Box<dyn std::error:
     if !path.exists() {
         return Ok(ProjectConfig {
             entry: None,
-            mode: RenderMode::Headless,
+            modes: vec![RenderMode::Headless],
             runtime: RuntimeConfig::default(),
         });
     }
@@ -78,83 +80,46 @@ fn load_project_config(path: &Path) -> Result<ProjectConfig, Box<dyn std::error:
     {
         runtime.height = height as u32;
     }
+    let mut modes = match settings
+        .and_then(|v| v.get("renderModes"))
+        .or_else(|| root.get("renderModes"))
+        .and_then(serde_json::Value::as_array)
+    {
+        Some(values) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "renderModes entries must be strings".to_owned())
+                    .and_then(RenderMode::parse)
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
+    if modes.is_empty() {
+        modes.push(RenderMode::parse(mode_name)?);
+    }
     Ok(ProjectConfig {
         entry,
-        mode: RenderMode::parse(mode_name)?,
+        modes,
         runtime,
     })
 }
 
-enum Renderer {
-    WebGpu(Box<ugr_wgpu::WgpuRenderer>),
-    WebGl(Box<ugr_webgl::GlRenderer>),
-}
-
-struct WindowApp {
-    renderer: Renderer,
-}
-
-impl winit::application::ApplicationHandler for WindowApp {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        match &mut self.renderer {
-            Renderer::WebGpu(renderer) => {
-                if renderer.is_initialized() {
-                    return;
-                }
-                if let Err(error) = pollster::block_on(renderer.initialize(event_loop)) {
-                    eprintln!("WebGPU initialization failed: {error}");
-                    event_loop.exit();
-                }
-            }
-            Renderer::WebGl(renderer) => {
-                if !renderer.is_initialized() {
-                    if let Err(error) = renderer.initialize(event_loop) {
-                        eprintln!("WebGL initialization failed: {error}");
-                        event_loop.exit();
-                    } else {
-                        renderer.draw();
-                    }
-                }
-            }
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        _window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
-    ) {
-        match event {
-            winit::event::WindowEvent::CloseRequested => event_loop.exit(),
-            winit::event::WindowEvent::Resized(size) => {
-                if let Renderer::WebGpu(renderer) = &mut self.renderer {
-                    renderer.resize(size.width, size.height);
-                } else if let Renderer::WebGl(renderer) = &mut self.renderer {
-                    renderer.resize(size.width, size.height);
-                }
-            }
-            winit::event::WindowEvent::RedrawRequested => match &mut self.renderer {
-                Renderer::WebGpu(renderer) => renderer.draw(),
-                Renderer::WebGl(renderer) => renderer.draw(),
-            },
-            _ => {}
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        match &self.renderer {
-            Renderer::WebGpu(renderer) => renderer.request_redraw(),
-            Renderer::WebGl(renderer) => renderer.request_redraw(),
-        }
-    }
-}
+use ugr_compositor::{Compositor, Layer};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // deno_core may enqueue timers while bootstrapping. Keep a Tokio context
+    // active for the complete JS and native rendering lifetime.
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_guard = tokio_runtime.enter();
     let mut script = None::<PathBuf>;
     let mut headless = false;
     let mut webgl = false;
     let mut webgpu = false;
+    let mut ui = false;
     let mut package = PathBuf::from("package.json");
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -162,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--headless" => headless = true,
             "--webgl" => webgl = true,
             "--webgpu" => webgpu = true,
+            "--ui" | "--html" => ui = true,
             "--script" => script = args.next().map(PathBuf::from),
             "--package" => {
                 package = args
@@ -179,38 +145,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let project = load_project_config(&package)?;
     let config = project.runtime;
-    let mode = if headless {
-        RenderMode::Headless
+    let modes = if headless {
+        vec![RenderMode::Headless]
     } else if webgl {
-        RenderMode::WebGl
+        vec![RenderMode::WebGl]
     } else if webgpu {
-        RenderMode::WebGpu
+        vec![RenderMode::WebGpu]
+    } else if ui {
+        vec![RenderMode::Ui]
     } else {
-        project.mode
+        project.modes
     };
     if script.is_none() {
         script = project.entry;
     }
     let mut runtime = Runtime::new(V8Engine::new(), config.clone());
-    let mut commands = Vec::new();
-    let mut webgpu_commands = Vec::new();
+    let entry_path = script.clone();
     let source = match script {
-        Some(path) => std::fs::read_to_string(path)?,
+        Some(path) => ugr_html::load_entry(path)?,
         None => "'Hello from UGR'".to_owned(),
     };
-    let result = match mode {
-        RenderMode::WebGl => {
-            let (result, values) = runtime.evaluate_with_webgl_commands(&source)?;
-            commands = ugr_webgl::parse_commands(&values);
-            result
-        }
-        RenderMode::WebGpu => {
-            let (result, values) = runtime.evaluate_with_webgpu_commands(&source)?;
-            webgpu_commands = values;
-            result
-        }
-        RenderMode::Canvas => runtime.evaluate_with_canvas_commands(&source)?.0,
-        RenderMode::Headless => runtime.evaluate(&source)?,
+    let mut result = String::new();
+    let mut webgl_commands = Vec::new();
+    let mut webgpu_commands = Vec::new();
+    let mut has_windowed_renderer = false;
+    for mode in &modes {
+        let current = match mode {
+            RenderMode::WebGl => {
+                let (value, values) = runtime.evaluate_with_webgl_commands(&source)?;
+                webgl_commands = ugr_webgl::parse_commands(&values);
+                has_windowed_renderer = true;
+                value
+            }
+            RenderMode::WebGpu => {
+                let (value, values) = runtime.evaluate_with_webgpu_commands(&source)?;
+                webgpu_commands = values;
+                has_windowed_renderer = true;
+                value
+            }
+            RenderMode::Canvas => runtime.evaluate_with_canvas_commands(&source)?.0,
+            RenderMode::Headless | RenderMode::Ui => {
+                let value = runtime.evaluate(&source)?;
+                if *mode == RenderMode::Ui {
+                    has_windowed_renderer = true;
+                }
+                value
+            }
+        };
+        result = current;
+    }
+    let ui_markup = if modes.contains(&RenderMode::Ui) {
+        let serialized = runtime
+            .evaluate("document?.documentElement?.outerHTML || document?.outerHTML || ''")?;
+        (!serialized.is_empty()).then_some(serialized)
+    } else {
+        None
     };
     println!("{result}");
 
@@ -218,27 +207,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if mode == RenderMode::Headless || mode == RenderMode::Canvas {
+    if !has_windowed_renderer {
         return Ok(());
     }
 
     let event_loop = winit::event_loop::EventLoop::new()?;
-    let renderer = match mode {
-        RenderMode::WebGpu => Renderer::WebGpu(Box::new(ugr_wgpu::WgpuRenderer::new(
-            config.title.clone(),
-            config.width,
-            config.height,
-            webgpu_commands,
-        ))),
-        RenderMode::WebGl => Renderer::WebGl(Box::new(ugr_webgl::GlRenderer::new(
-            config.title.clone(),
-            config.width,
-            config.height,
-            commands,
-        ))),
-        RenderMode::Headless | RenderMode::Canvas => unreachable!(),
-    };
-    let mut app = WindowApp { renderer };
+    let display = event_loop.owned_display_handle();
+    let mut layers = Vec::new();
+    for mode in modes {
+        match mode {
+            RenderMode::WebGpu => layers.push(Layer::WebGpu(webgpu_commands.clone())),
+            RenderMode::WebGl => layers.push(Layer::WebGl(webgl_commands.clone())),
+            RenderMode::Ui => {
+                let path = entry_path
+                    .as_ref()
+                    .ok_or("UI mode requires an HTML entry file")?;
+                let extension = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default();
+                if !extension.eq_ignore_ascii_case("html") && !extension.eq_ignore_ascii_case("htm")
+                {
+                    return Err("UI mode requires an .html or .htm entry file".into());
+                }
+                let markup = ui_markup.clone().unwrap_or(std::fs::read_to_string(path)?);
+                let document = ugr_html::parse_document(&markup);
+                layers.push(Layer::Ui(ugr_ui::UiRenderer::from_document(
+                    &document,
+                    config.width,
+                    config.height,
+                )?));
+            }
+            RenderMode::Headless | RenderMode::Canvas => {}
+        }
+    }
+    let mut app = Compositor::new(
+        config.title.clone(),
+        config.width,
+        config.height,
+        layers,
+        display,
+    )?;
     event_loop.run_app(&mut app)?;
     Ok(())
 }

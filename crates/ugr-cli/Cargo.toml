@@ -6,9 +6,12 @@ name = "ugr-cli"
 version = "0.1.0"
 
 [dependencies]
-pollster = "=0.4.0"
 serde_json = "=1.0.151"
+tokio = { version = "=1.53.1", features = ["rt", "time", "net"] }
+ugr-compositor = { path = "../ugr-compositor" }
 ugr-runtime = {path = "../ugr-runtime"}
+ugr-html = {path = "../ugr-html"}
+ugr-ui = {path = "../ugr-ui"}
 ugr-webgl = {path = "../ugr-webgl"}
 ugr-wgpu = {path = "../ugr-wgpu"}
 winit = "=0.30.13"

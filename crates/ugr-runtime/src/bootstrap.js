@@ -60,6 +60,123 @@
   const adapter = { name: "UGR D3D12 Adapter", features: new Set(), limits: { maxTextureDimension2D: 16384 }, isFallbackAdapter: false, requestDevice() { return device; } };
   const gpu = { requestAdapter() { return adapter; }, getPreferredCanvasFormat() { return "bgra8unorm-srgb"; } };
   globalThis.document = { createElement(tag) { return tag === "canvas" ? (() => { const canvas = { width: 1, height: 1, getContext(kind, attrs) { if (kind === "webgl" || kind === "experimental-webgl") return createWebGlContext("webgl", attrs); if (kind === "webgl2") return createWebGlContext("webgl2", attrs); if (kind === "webgpu") return new GPUCanvasContext(canvas); if (kind === "2d") return createCanvas2DContext(); return null; } }; return canvas; })() : {}; } };
+  const legacyCreateElement = globalThis.document.createElement.bind(globalThis.document);
+  const domMatch = (node, selector) => {
+    selector = String(selector).trim();
+    if (!selector || !node || node.nodeType !== 1) return false;
+    if (selector.startsWith('#')) return node.id === selector.slice(1);
+    if (selector.startsWith('.')) return node.className.split(/\s+/).includes(selector.slice(1));
+    const parts = selector.split('.');
+    return node.tagName.toLowerCase() === parts[0].toLowerCase() && (!parts[1] || node.className.split(/\s+/).includes(parts[1]));
+  };
+  const makeDomElement = (tag, attributes = {}) => {
+    const canvas = tag === 'canvas' ? legacyCreateElement('canvas') : null;
+    const node = { nodeType: 1, tagName: String(tag).toUpperCase(), nodeName: String(tag).toUpperCase(), parentNode: null, children: [], attributes: { ...attributes }, style: {}, _listeners: {}, textContent: '', value: attributes.value || '', type: attributes.type || (tag === 'input' ? 'text' : ''), checked: 'checked' in attributes, disabled: 'disabled' in attributes, selected: 'selected' in attributes, hidden: 'hidden' in attributes, tabIndex: Number(attributes.tabindex ?? -1) };
+    node.id = attributes.id || '';
+    node.className = attributes.class || attributes.className || '';
+    node.appendChild = (child) => { if (child.parentNode) child.parentNode.removeChild(child); child.parentNode = node; node.children.push(child); return child; };
+    node.removeChild = (child) => { const index = node.children.indexOf(child); if (index >= 0) { node.children.splice(index, 1); child.parentNode = null; } return child; };
+    node.insertBefore = (child, reference) => { if (!reference || !node.children.includes(reference)) return node.appendChild(child); if (child.parentNode) child.parentNode.removeChild(child); child.parentNode = node; node.children.splice(node.children.indexOf(reference), 0, child); return child; };
+    node.setAttribute = (name, value) => { name = String(name).toLowerCase(); value = String(value); node.attributes[name] = value; if (name === 'id') node.id = value; if (name === 'class') node.className = value; if (name === 'value') node.value = value; if (name === 'type') node.type = value; };
+    node.getAttribute = (name) => node.attributes[String(name).toLowerCase()] ?? null;
+    node.hasAttribute = (name) => Object.prototype.hasOwnProperty.call(node.attributes, String(name).toLowerCase());
+    node.removeAttribute = (name) => { name = String(name).toLowerCase(); delete node.attributes[name]; if (name === 'id') node.id = ''; if (name === 'class') node.className = ''; };
+    node.addEventListener = (type, listener, options = {}) => { if (!listener) return; const entry = { listener, once: !!(options && options.once) }; (node._listeners[type] ||= []).push(entry); };
+    node.removeEventListener = (type, listener) => { node._listeners[type] = (node._listeners[type] || []).filter((entry) => (entry.listener || entry) !== listener); };
+    node.dispatchEvent = (event) => { const value = typeof event === 'string' ? { type: event, target: node } : { ...event, target: node }; for (const entry of node._listeners[value.type] || []) { const listener = entry.listener || entry; if (typeof listener === 'function') listener.call(node, value); else if (listener && typeof listener.handleEvent === 'function') listener.handleEvent(value); if (entry.once) node.removeEventListener(value.type, listener); } return !value.defaultPrevented; };
+    node.focus = () => { node.ownerDocument && (node.ownerDocument.activeElement = node); node.dispatchEvent({ type: 'focus' }); };
+    node.blur = () => { node.dispatchEvent({ type: 'blur' }); };
+    node.querySelectorAll = (selector) => { const result = []; const visit = (child) => { for (const value of child.children) { if (domMatch(value, selector)) result.push(value); visit(value); } }; visit(node); return result; };
+    node.querySelector = (selector) => node.querySelectorAll(selector)[0] || null;
+    node.getBoundingClientRect = () => { const number = (value, fallback) => { const parsed = Number.parseFloat(String(value || '').replace('px', '')); return Number.isFinite(parsed) ? parsed : fallback; }; const width = number(node.style.width || node.getAttribute('width'), 0); const height = number(node.style.height || node.getAttribute('height'), 0); return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height, toJSON() { return this; } }; };
+    if (canvas) { node.width = Number(attributes.width) || canvas.width; node.height = Number(attributes.height) || canvas.height; node.getContext = (kind, options) => canvas.getContext(kind, options); }
+    if (tag === 'input' || tag === 'button' || tag === 'a') { node.click = () => { if (!node.disabled) node.dispatchEvent({ type: 'click', bubbles: true, cancelable: true }); }; }
+    if (tag === 'form') { node.submit = () => node.dispatchEvent({ type: 'submit', bubbles: true, cancelable: true }); node.reset = () => { for (const field of node.querySelectorAll('input')) field.value = field.getAttribute('value') || ''; node.dispatchEvent({ type: 'reset', bubbles: true }); }; }
+    if (tag === 'select') { Object.defineProperty(node, 'options', { get: () => node.children.filter((child) => child.tagName === 'OPTION') }); Object.defineProperty(node, 'selectedIndex', { get: () => node.options.findIndex((option) => option.selected), set: (index) => node.options.forEach((option, current) => { option.selected = current === Number(index); }) }); }
+    return node;
+  };
+  const parseDomMarkup = (markup) => {
+    const root = makeDomElement('document'); root.nodeType = 9; root.tagName = '#document'; root.ownerDocument = root;
+    const stack = [root]; const tokenPattern = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g; let match;
+    while ((match = tokenPattern.exec(String(markup)))) { const token = match[0]; if (token.startsWith('<!--')) continue; if (!token.startsWith('<')) { const text = token.trim(); if (text) stack[stack.length - 1].textContent += text; continue; }
+      if (token.startsWith('</')) { if (stack.length > 1) stack.pop(); continue; }
+      if (token.startsWith('<!')) continue;
+      const open = token.slice(1, -1).replace(/\/$/, '').trim(); const nameMatch = open.match(/^[^\s]+/); if (!nameMatch) continue; const tag = nameMatch[0].toLowerCase(); const attrs = {}; const attrPattern = /([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+)))?/g; let attr; const rest = open.slice(nameMatch[0].length); while ((attr = attrPattern.exec(rest))) attrs[attr[1].toLowerCase()] = attr[2] ?? attr[3] ?? attr[4] ?? '';
+      const node = makeDomElement(tag, attrs); node.ownerDocument = root; stack[stack.length - 1].appendChild(node); if (!/^(input|img|br|hr|meta|link|canvas)$/.test(tag) && !token.endsWith('/>')) stack.push(node);
+    }
+    const walk = (node) => { for (const child of node.children) { child.ownerDocument = root; walk(child); } }; walk(root); return root;
+  };
+  const installDocument = (markup) => { const parsed = parseDomMarkup(markup); const document = parsed; document.createElement = (tag) => { const element = makeDomElement(String(tag).toLowerCase()); element.ownerDocument = document; return element; }; document.getElementById = (id) => document.querySelector(`#${id}`); document.body = parsed.querySelector('body') || parsed; document.head = parsed.querySelector('head') || parsed; document.documentElement = parsed.querySelector('html') || parsed; document.activeElement = null; document.createTextNode = (text) => ({ nodeType: 3, textContent: String(text), parentNode: null }); document.defaultView = globalThis; globalThis.document = document; };
+  globalThis.__ugr_install_document = installDocument;
+  const enhanceDomElement = (node, document) => {
+    if (!node || node.nodeType !== 1 || node.__ugrEnhanced) return;
+    node.__ugrEnhanced = true;
+    node.ownerDocument = document;
+    const rawText = node.textContent || '';
+    Object.defineProperty(node, 'textContent', { configurable: true, get() { return node.children.reduce((value, child) => value + child.textContent, node._textContent || ''); }, set(value) { node._textContent = String(value); node.children = []; } });
+    node._textContent = rawText;
+    let elementId = node.id || '';
+    let elementClassName = node.className || '';
+    Object.defineProperty(node, 'id', { configurable: true, get: () => elementId, set: (value) => { elementId = String(value); node.attributes.id = elementId; } });
+    Object.defineProperty(node, 'className', { configurable: true, get: () => elementClassName, set: (value) => { elementClassName = String(value); node.attributes.class = elementClassName; } });
+    Object.defineProperty(node, 'parentElement', { get() { return node.parentNode && node.parentNode.nodeType === 1 ? node.parentNode : null; } });
+    Object.defineProperty(node, 'firstChild', { get() { return node.children[0] || null; } });
+    Object.defineProperty(node, 'lastChild', { get() { return node.children[node.children.length - 1] || null; } });
+    Object.defineProperty(node, 'childNodes', { get() { return node.children; } });
+    Object.defineProperty(node, 'nextSibling', { get() { const siblings = node.parentNode?.children || []; const index = siblings.indexOf(node); return index >= 0 ? siblings[index + 1] || null : null; } });
+    node.remove = () => { if (node.parentNode) node.parentNode.removeChild(node); };
+    node.replaceChildren = (...children) => { for (const child of [...node.children]) node.removeChild(child); children.forEach((child) => node.appendChild(child)); };
+    node.contains = (candidate) => { if (candidate === node) return true; return node.children.some((child) => child === candidate || child.contains?.(candidate)); };
+    Object.defineProperty(node, 'innerHTML', { configurable: true, get() { return node.children.map(serializeDom).join('') || node._textContent || ''; }, set(value) { const parsed = parseDomMarkup(String(value)); node.children = []; node._textContent = ''; for (const child of parsed.children) { node.appendChild(child); enhanceDomElement(child, node.ownerDocument); } } });
+    Object.defineProperty(node, 'outerHTML', { get() { return serializeDom(node); } });
+    node.matches = (selector) => advancedMatch(node, selector);
+    node.closest = (selector) => { let current = node; while (current) { if (advancedMatch(current, selector)) return current; current = current.parentNode; } return null; };
+    node.querySelectorAll = (selector) => queryDescendants(node, selector);
+    node.querySelector = (selector) => node.querySelectorAll(selector)[0] || null;
+    node.classList = { contains: (name) => node.className.split(/\s+/).filter(Boolean).includes(String(name)), add: (...names) => { const values = new Set(node.className.split(/\s+/).filter(Boolean)); names.forEach((name) => values.add(String(name))); node.className = [...values].join(' '); node.setAttribute('class', node.className); }, remove: (...names) => { const remove = new Set(names.map(String)); node.className = node.className.split(/\s+/).filter((name) => name && !remove.has(name)).join(' '); node.setAttribute('class', node.className); }, toggle: (name, force) => { const present = node.classList.contains(name); const next = force === undefined ? !present : !!force; if (next !== present) (next ? node.classList.add : node.classList.remove)(name); return next; }, toString: () => node.className };
+    node.dataset = new Proxy({}, { get: (_, name) => { const key = `data-${String(name).replace(/[A-Z]/g, (value) => `-${value.toLowerCase()}`)}`; return node.getAttribute(key) ?? node.attributes[key] ?? undefined; }, set: (_, name, value) => { node.setAttribute(`data-${String(name).replace(/[A-Z]/g, (v) => `-${v.toLowerCase()}`)}`, value); return true; } });
+    node.style = new Proxy(node.style || {}, { get(target, name) { const key = String(name).replace(/[A-Z]/g, (value) => `-${value.toLowerCase()}`); if (name === 'cssText') return Object.entries(target).map(([property, value]) => `${property}:${value}`).join(';'); if (name === 'setProperty') return (property, value) => { target[String(property).toLowerCase()] = String(value); }; if (name === 'getPropertyValue') return (property) => target[String(property).toLowerCase()] || ''; if (name === 'removeProperty') return (property) => { const old = target[String(property).toLowerCase()] || ''; delete target[String(property).toLowerCase()]; return old; }; return target[key] || target[name] || ''; }, set(target, name, value) { if (name === 'cssText') { for (const declaration of String(value).split(';')) { const [key, val] = declaration.split(':'); if (key && val) target[key.trim().toLowerCase()] = val.trim(); } } else { const key = String(name).replace(/[A-Z]/g, (value) => `-${value.toLowerCase()}`); target[key] = String(value); } return true; } });
+    const dispatch = node.dispatchEvent;
+    node.dispatchEvent = (event) => { const value = typeof event === 'string' ? { type: event } : event; value.target ||= node; value.currentTarget = node; dispatch(value); if (!value.cancelBubble && node.parentNode && node.parentNode.dispatchEvent) node.parentNode.dispatchEvent(value); return true; };
+    node.click = node.click || (() => node.dispatchEvent({ type: 'click' }));
+    for (const child of node.children) enhanceDomElement(child, document);
+  };
+  const serializeDom = (node) => { if (node.nodeType === 3) return node.textContent; const attributes = { ...(node.attributes || {}) }; if (node.id) attributes.id = node.id; if (node.className) attributes.class = node.className; if (node.tagName?.toLowerCase() === 'input') attributes.value = node.value ?? ''; if (node.style && Object.keys(node.style).length) attributes.style = node.style.cssText; const attrs = Object.entries(attributes).map(([name, value]) => ` ${name}="${String(value).replace(/"/g, '&quot;')}"`).join(''); return `<${node.tagName.toLowerCase()}${attrs}>${node.children.map(serializeDom).join('') || node._textContent || ''}</${node.tagName.toLowerCase()}>`; };
+  const matchesSimple = (node, selector) => { selector = selector.trim(); if (!selector || !node || node.nodeType !== 1) return false; const attribute = selector.match(/\[([^=\]]+)(?:=["']?([^\]"']+)["']?)?\]/); if (attribute && (!node.hasAttribute(attribute[1]) || (attribute[2] && node.getAttribute(attribute[1]) !== attribute[2]))) return false; selector = selector.replace(attribute ? attribute[0] : '', ''); const id = selector.match(/#([\w-]+)/); if (id && node.id !== id[1]) return false; const classes = [...selector.matchAll(/\.([\w-]+)/g)].map((match) => match[1]); if (classes.some((name) => !node.className.split(/\s+/).includes(name))) return false; const tag = selector.replace(/[#.].*$/, '').trim(); return !tag || tag === '*' || node.tagName.toLowerCase() === tag.toLowerCase(); };
+  const advancedMatch = (node, selector) => String(selector).split(',').some((part) => { const tokens = part.trim().split(/\s+|>/).filter(Boolean); let current = node; for (let index = tokens.length - 1; index >= 0; index -= 1) { if (!matchesSimple(current, tokens[index])) return false; if (index > 0) { current = current.parentNode; while (current && !matchesSimple(current, tokens[index - 1])) current = current.parentNode; if (!current) return false; } } return true; });
+  const queryDescendants = (node, selector) => { const result = []; const visit = (parent) => { for (const child of parent.children || []) { if (advancedMatch(child, selector)) result.push(child); visit(child); } }; visit(node); return result; };
+  const enhanceDocument = (markup) => { const document = globalThis.document; for (const child of document.children) enhanceDomElement(child, document); const createElement = document.createElement; document.createElement = (tag) => { const element = createElement(tag); enhanceDomElement(element, document); return element; }; document.querySelectorAll = (selector) => queryDescendants(document, selector); document.querySelector = (selector) => document.querySelectorAll(selector)[0] || null; document.getElementsByTagName = (tag) => document.querySelectorAll(tag); document.getElementsByClassName = (name) => document.querySelectorAll(`.${name}`); document.createElementNS = (_, tag) => document.createElement(tag); document.createEvent = (type) => new Event(type); document.readyState = 'complete'; document.dispatchEvent(new Event('DOMContentLoaded')); return markup; };
+  const installEnhancedDocumentBase = (markup) => { installDocument(markup); enhanceDocument(markup); };
+  const upgradeDocumentEvents = (document) => {
+    const upgrade = (node) => {
+      if (!node || node.nodeType !== 1) return;
+      node.dispatchEvent = (event) => {
+        const value = typeof event === 'string' ? new Event(event) : event;
+        if (!value.target) value.target = node;
+        value.defaultPrevented ||= false;
+        value.cancelBubble ||= false;
+        value.preventDefault ||= (() => { value.defaultPrevented = true; });
+        value.stopPropagation ||= (() => { value.cancelBubble = true; });
+        value.stopImmediatePropagation ||= (() => { value.cancelBubble = true; value.__ugrImmediate = true; });
+        value.currentTarget = node;
+        for (const entry of [...(node._listeners[value.type] || [])]) {
+          const listener = entry.listener || entry;
+          if (typeof listener === 'function') listener.call(node, value);
+          else if (listener && typeof listener.handleEvent === 'function') listener.handleEvent(value);
+          if (entry.once) node.removeEventListener(value.type, listener);
+          if (value.__ugrImmediate) break;
+        }
+        if (!value.cancelBubble && node.parentNode && node.parentNode.dispatchEvent) node.parentNode.dispatchEvent(value);
+        return !value.defaultPrevented;
+      };
+      for (const child of node.children || []) upgrade(child);
+    };
+    for (const child of document.children || []) upgrade(child);
+  };
+  const installEnhancedDocument = (markup) => { installEnhancedDocumentBase(markup); upgradeDocumentEvents(globalThis.document); return markup; };
+  globalThis.__ugr_install_document = installEnhancedDocument;
+  globalThis.getComputedStyle = (element) => { const computed = {}; const document = element && element.ownerDocument; for (const styleNode of document ? document.querySelectorAll('style') : []) { for (const rule of String(styleNode.textContent || '').split('}')) { const parts = rule.split('{'); if (parts.length !== 2 || !advancedMatch(element, parts[0].trim())) continue; for (const declaration of parts[1].split(';')) { const [name, value] = declaration.split(':'); if (name && value) computed[name.trim()] = value.trim(); } } } Object.assign(computed, element.style || {}); const styleText = element.getAttribute && element.getAttribute('style'); if (styleText) for (const declaration of styleText.split(';')) { const [name, value] = declaration.split(':'); if (name && value) computed[name.trim()] = value.trim(); } computed.getPropertyValue = (name) => computed[name] || ''; computed.setProperty = (name, value) => { computed[name] = String(value); }; return computed; };
+  globalThis.Event = class Event { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } };
   globalThis.navigator = { gpu };
 })();
     
