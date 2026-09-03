@@ -1,6 +1,6 @@
 {
   "name": "ugr-game",
-  "main": "tests/scripts/index.html",
+  "main": "tests/scripts/calculator.html",
   "ugr": {
     "renderModes": [
       "ui"

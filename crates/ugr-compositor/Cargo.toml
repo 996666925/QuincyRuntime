@@ -7,10 +7,10 @@ license = "MIT"
 
 [dependencies]
 pollster = "=0.4.0"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 skia-safe = "=0.99.0"
-softbuffer = "=0.4.8"
+wgpu = "=30.0.1"
 ugr-ui = { path = "../ugr-ui" }
 ugr-webgl = { path = "../ugr-webgl" }
-ugr-wgpu = { path = "../ugr-wgpu" }
 winit = "=0.30.13"

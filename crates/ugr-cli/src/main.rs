@@ -107,6 +107,8 @@ fn load_project_config(path: &Path) -> Result<ProjectConfig, Box<dyn std::error:
 }
 
 use ugr_compositor::{Compositor, Layer};
+mod ui_bridge;
+use ui_bridge::UiEventBridge;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // deno_core may enqueue timers while bootstrapping. Keep a Tokio context
@@ -212,7 +214,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let event_loop = winit::event_loop::EventLoop::new()?;
-    let display = event_loop.owned_display_handle();
     let mut layers = Vec::new();
     for mode in modes {
         match mode {
@@ -241,13 +242,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             RenderMode::Headless | RenderMode::Canvas => {}
         }
     }
-    let mut app = Compositor::new(
-        config.title.clone(),
-        config.width,
-        config.height,
-        layers,
-        display,
-    )?;
+    let mut app = Compositor::new(config.title.clone(), config.width, config.height, layers)?;
+    app.set_ui_event_handler(UiEventBridge::new(runtime).into_handler());
     event_loop.run_app(&mut app)?;
     Ok(())
 }

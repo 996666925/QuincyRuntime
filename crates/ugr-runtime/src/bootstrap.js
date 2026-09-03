@@ -1,5 +1,6 @@
 
 (() => {
+  let nextDomId = 1;
   const id = () => Deno.core.ops.op_alloc_resource();
   globalThis.__ugr_webgl_commands = [];
   globalThis.__ugr_webgpu_commands = [];
@@ -70,6 +71,7 @@
     return node.tagName.toLowerCase() === parts[0].toLowerCase() && (!parts[1] || node.className.split(/\s+/).includes(parts[1]));
   };
   const makeDomElement = (tag, attributes = {}) => {
+    attributes = { ...attributes, 'data-ugr-id': attributes['data-ugr-id'] || `ugr-${nextDomId++}` };
     const canvas = tag === 'canvas' ? legacyCreateElement('canvas') : null;
     const node = { nodeType: 1, tagName: String(tag).toUpperCase(), nodeName: String(tag).toUpperCase(), parentNode: null, children: [], attributes: { ...attributes }, style: {}, _listeners: {}, textContent: '', value: attributes.value || '', type: attributes.type || (tag === 'input' ? 'text' : ''), checked: 'checked' in attributes, disabled: 'disabled' in attributes, selected: 'selected' in attributes, hidden: 'hidden' in attributes, tabIndex: Number(attributes.tabindex ?? -1) };
     node.id = attributes.id || '';
@@ -175,6 +177,43 @@
   };
   const installEnhancedDocument = (markup) => { installEnhancedDocumentBase(markup); upgradeDocumentEvents(globalThis.document); return markup; };
   globalThis.__ugr_install_document = installEnhancedDocument;
+  // Native compositor events identify elements by the same renderable-child
+  // path used by the Rust layout tree.
+  globalThis.__ugr_dispatch_ui_event = (target, init = {}) => {
+    const ignored = new Set(['#text', 'head', 'title', 'meta', 'link', 'style', 'script', 'option']);
+    let node = globalThis.document;
+    const key = target && !Array.isArray(target) ? target.key : '';
+    if (key) {
+      const find = (parent) => {
+        for (const child of parent.children || []) {
+          if (child.attributes?.['data-ugr-id'] === key) return child;
+          const found = find(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      node = find(globalThis.document);
+    } else {
+      for (const index of (Array.isArray(target) ? target : [])) {
+        const children = (node.children || []).filter((child) => !ignored.has(String(child.tagName || '').toLowerCase()));
+        node = children[index];
+        if (!node) return JSON.stringify({ defaultPrevented: false, markup: '' });
+      }
+    }
+    if (init.value !== undefined && node && ('value' in node)) {
+      node.value = String(init.value);
+      if (node.setAttribute && node.tagName?.toLowerCase() === 'textarea') node.setAttribute('value', node.value);
+    }
+    const before = globalThis.document?.documentElement?.outerHTML || globalThis.document?.outerHTML || '';
+    const event = { ...init, target: node, bubbles: true, cancelable: true };
+    const allowed = !!(node && node.dispatchEvent && node.dispatchEvent(event));
+    const after = globalThis.document?.documentElement?.outerHTML || globalThis.document?.outerHTML || '';
+    return JSON.stringify({
+      defaultPrevented: !allowed || !!event.defaultPrevented,
+      markup: before === after ? '' : after
+    });
+  };
+  globalThis.__ugr_dispatch_click = (path = []) => __ugr_dispatch_ui_event(path, { type: 'click' });
   globalThis.getComputedStyle = (element) => { const computed = {}; const document = element && element.ownerDocument; for (const styleNode of document ? document.querySelectorAll('style') : []) { for (const rule of String(styleNode.textContent || '').split('}')) { const parts = rule.split('{'); if (parts.length !== 2 || !advancedMatch(element, parts[0].trim())) continue; for (const declaration of parts[1].split(';')) { const [name, value] = declaration.split(':'); if (name && value) computed[name.trim()] = value.trim(); } } } Object.assign(computed, element.style || {}); const styleText = element.getAttribute && element.getAttribute('style'); if (styleText) for (const declaration of styleText.split(';')) { const [name, value] = declaration.split(':'); if (name && value) computed[name.trim()] = value.trim(); } computed.getPropertyValue = (name) => computed[name] || ''; computed.setProperty = (name, value) => { computed[name] = String(value); }; return computed; };
   globalThis.Event = class Event { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } };
   globalThis.navigator = { gpu };

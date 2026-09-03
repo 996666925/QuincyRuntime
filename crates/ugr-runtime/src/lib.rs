@@ -434,6 +434,39 @@ mod tests {
     }
 
     #[test]
+    fn native_click_dispatches_to_dom_path() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r#"__ugr_install_document('<html><head><style>.hidden { display: none; }</style></head><body><button id="run">Run</button></body></html>'); const button=document.getElementById('run'); button.addEventListener('click',()=>button.textContent='Done'); __ugr_dispatch_click([0, 0, 0]); button.textContent"#,
+            )
+            .unwrap();
+        assert_eq!(result, "Done");
+    }
+
+    #[test]
+    fn native_event_dispatch_supports_keyboard_and_prevent_default() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r#"__ugr_install_document('<body><input value="x"></body>'); const input=document.querySelector('input'); let seen=''; input.addEventListener('keydown',(event)=>{seen=event.key; event.preventDefault();}); __ugr_dispatch_ui_event([0,0], {type:'keydown', key:'Enter', code:'Enter'}); `${seen}|${input.value}`"#,
+            )
+            .unwrap();
+        assert_eq!(result, "Enter|x");
+    }
+
+    #[test]
+    fn native_event_targets_survive_dom_reordering() {
+        let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
+        let result = runtime
+            .evaluate(
+                r#"__ugr_install_document('<body><button>A</button><button>B</button></body>'); const buttons=document.querySelectorAll('button'); const key=buttons[1].getAttribute('data-ugr-id'); let clicked=''; buttons[1].addEventListener('click',()=>clicked=buttons[1].textContent); buttons[0].parentNode.insertBefore(buttons[1], buttons[0]); __ugr_dispatch_ui_event({key}, {type:'click'}); clicked"#,
+            )
+            .unwrap();
+        assert_eq!(result, "B");
+    }
+
+    #[test]
     fn serialized_dom_keeps_styles_and_mutated_input_value() {
         let mut runtime = Runtime::new(V8Engine::new(), RuntimeConfig::default());
         let result = runtime
